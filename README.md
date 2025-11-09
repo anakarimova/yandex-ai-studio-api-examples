@@ -32,3 +32,10 @@ yandex-ai-studio-api-examples/
 │ └── to do
 └── README.md
 ```
+
+## Полезные ссылки
+
+- [Документация Yandex AI Studio](https://yandex.cloud/ru/docs/ai-studio/)
+- [Пошаговые инструкции (tutorials)](https://yandex.cloud/ru/docs/ai-studio/tutorials/)
+- [Model Gallery](https://yandex.cloud/ru/docs/ai-studio/models/)
+- [Yandex Cloud Community](https://t.me/YFM_Community)
