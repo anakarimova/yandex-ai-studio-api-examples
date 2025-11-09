@@ -1,1 +1,34 @@
-# yandex-ai-studio-api-examples
+# Yandex AI Studio API Examples
+
+Примеры использования API **Yandex AI Studio**
+
+**AI Studio** — это единая платформа **Yandex Cloud** для работы с большими языковыми  моделями:  
+создавайте агентов, подключайте инструменты (`file_search`, `web_search`, `function_calling`), используйте свои данные и интегрируйте модели в приложения.
+
+```
+yandex-ai-studio-api-examples/
+├── responses/ # Примеры работы с Responses API
+│ ├── background.py # Запуск в background режиме
+│ ├── dialog.py # Простой диалог с использование previous_request_id
+│ ├── file_search_tool.py # Использование file_search инструмента
+│ ├── function_calling.py # Пример использования function calling
+│ ├── id_variables.py # Пример использования id конфигурации диалога, созданного в консоли
+│ ├── mcp_always_approve.py # mcp tool без подтверждения
+│ ├── mcp_submit_approve.py # mcp tool с подтвеждением
+│ ├── simple_request.py # Обращение к модели
+│ ├── stream.py # Генерация с промежуточными результатами
+│ └── web_tool.py # Использование web_search инструмента
+├── realtime/ # Примеры голосовых агентов (WebSocket)
+│ ├── voice-agent.py # Голосовой агент с реализацией поверх API
+│ ├── to do # Голосовой агент с реализацией поверх SDK
+│ └── to do
+├── embeddings/ # Примеры получения эмбеддингов
+│ └── embeddings.py # Пример работы с эмбеддингами
+├── vector_store/ # Примеры загрузки и поиска в векторном хранилище
+│ ├── index.py # Создании индекса из загруженных файлов
+│ ├── upload.py # Загрузка файлов
+│ └── to do
+├── tuning/ # Примеры тонкой настройки моделей
+│ └── to do
+└── README.md
+```
