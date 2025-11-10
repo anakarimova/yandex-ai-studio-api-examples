@@ -3,6 +3,7 @@
 Yandex AI Studio — это платформа для создания AI-агентов и ИИ-приложений.
 Этот репозиторий создан, чтобы показать, как начать работать с API AI Studio — от простых запросов к модели до создания голосовых агентов и систем с памятью и поиском.
 
+## Структура примеров
 ```
 yandex-ai-studio-api-examples/
 ├── responses/ # Примеры работы с Responses API
@@ -16,7 +17,7 @@ yandex-ai-studio-api-examples/
 │ ├── simple_request.py # Обращение к модели
 │ ├── stream.py # Генерация с промежуточными результатами
 │ └── web_tool.py # Использование web_search инструмента
-├── realtime/ # Примеры голосовых агентов (WebSocket)
+├── realtime/ # Примеры работы с Realtime API (WebSocket)
 │ ├── voice-agent.py # Голосовой агент с реализацией поверх API
 │ ├── to do # Голосовой агент с реализацией поверх SDK
 │ └── to do
