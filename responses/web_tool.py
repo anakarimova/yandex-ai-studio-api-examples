@@ -16,17 +16,17 @@ response = client.responses.create(
     input="Сделай краткий обзор новостей про LLM за сентябрь 2025 года.",
     tools=[
         {
-            "web_search": {
+                "type": "web_search",
                 "filters": {
+                    # до 5 штук
                     "allowed_domains": [
-                        "habr.ru"
-                    ]
-                },
-                "user_location": {
-                    "region": "213",
+                        "..."
+                    ],
+                    "user_location": {
+                        "region": "213",
+                    }
                 }
             }
-        }
     ],
     temperature=0.3,
     max_output_tokens=1000
