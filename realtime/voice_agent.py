@@ -10,7 +10,6 @@ import sys
 
 import aiohttp
 
-from yandex_cloud_ml_sdk import AsyncYCloudML
 from yandex_cloud_ml_sdk._experimental.audio.microphone import AsyncMicrophone
 from yandex_cloud_ml_sdk._experimental.audio.out import AsyncAudioOut
 
@@ -267,7 +266,7 @@ async def uplink(ws):
 
 # Главный цикл приложения
 async def main():
-    print("Говорите (server VAD). Нажмите Ctrl+C для выхода.")
+    print("Говорите (server VAD). Выход: Ctrl+C. Используйте наушники, чтобы избежать самопрерываний.")
 
     try:
         async with aiohttp.ClientSession() as session:
