@@ -226,26 +226,15 @@ async def main():
                 "Если спрашивают о погоде — вызывай функцию get_weather."
                 "При вопросе про {голосовой профилировщик} - обращайся к фукнции file_search"
             ),
-            # В ответе может быть и текст, и звук
-            "output_modalities": ["text", "audio"],
-            "audio": {
-                "input": {
-                    # Формат входящего аудио
-                    "format": {"type": "audio/pcm", "rate": IN_RATE, "channels": CHANNELS},
-                    # Конфигурация серверного VAD
-                    "turn_detection": {
-                        "type": "server_vad",  # включаем серверный VAD
-                        "threshold": 0.5,  # чувствительность
-                        "silence_duration_ms": 400,  # длительность тишины для завершения речи
-                    }
-                },
-                # Формат исходящего аудио
-                "output": {
-                    "format": {"type": "audio/pcm", "rate": OUT_RATE},
-                    "voice": VOICE
-                }
+            "modalities": ["text", "audio"],
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "turn_detection": {
+                "type": "server_vad",  # включаем серверный VAD
+                "threshold": 0.5,  # чувствительность
+                "silence_duration_ms": 400,  # длительность тишины для завершения речи
             },
-            # "tool_choice": {"type": "auto"}
+            "voice": VOICE,
             # Инструменты для использования в агенте
             "tools": [
                 # Рукописная фукнция модели для демонстрации работы с function calling
@@ -395,11 +384,7 @@ async def main():
                     # Запрашиваем новый ответ агента
                     log("отправляем response.create после функции")
                     await ws.send_json({
-                        "type": "response.create",
-                        "response": {
-                            "modalities": ["audio", "text"],
-                            "conversation": "default"
-                        }
+                        "type": "response.create"
                     })
                 continue
 
