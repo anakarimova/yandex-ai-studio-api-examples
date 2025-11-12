@@ -1,30 +1,22 @@
-import json
-import base64
+#!/usr/bin/env python3
+from __future__ import annotations
+
 import asyncio
-import threading
-import time
+import base64
+import json
+import logging
 import random
 import sys
-from typing import Optional
 
-import numpy as np
-import sounddevice as sd
 import aiohttp
 
-# ==== Конфигурация ====
-YANDEX_CLOUD_API_KEY = "..."
-YANDEX_CLOUD_FOLDER_ID = "..."
+from yandex_cloud_ml_sdk import AsyncYCloudML
+from yandex_cloud_ml_sdk._experimental.audio.microphone import AsyncMicrophone
+from yandex_cloud_ml_sdk._experimental.audio.out import AsyncAudioOut
 
-# Проверяем, что заданы ключ и ID каталога
-assert YANDEX_CLOUD_FOLDER_ID and YANDEX_CLOUD_API_KEY, "YANDEX_CLOUD_FOLDER_ID и YANDEX_CLOUD_API_KEY обязательны"
+assert sys.version_info >= (3, 10), "Python 3.10+ is required"
 
 # Настройки API
-WS_URL = (
-    f"wss://rest-assistant.api.cloud.yandex.net/v1/realtime/openai"
-    f"?model=gpt://{YANDEX_CLOUD_FOLDER_ID}/speech-realtime-250923"
-)
-
-HEADERS = {"Authorization": f"api-key {YANDEX_CLOUD_API_KEY}"}
 
 # Конфигурация аудио для сервера
 IN_RATE = 44100
@@ -32,22 +24,25 @@ OUT_RATE = 44100
 CHANNELS = 1
 VOICE = "dasha"
 
-# Конфигурация аудио для локального устройства
-FRAME_MS = 20
-IN_SAMPLES = int(IN_RATE * FRAME_MS / 1000)
-OUT_BLOCK = int(OUT_RATE * 0.02)
-
 # Конфигурация инструментов
 VECTOR_STORE_ID = "..."
 
+# ==== Креды Облака ====
+YANDEX_CLOUD_FOLDER_ID = "..."
+YANDEX_CLOUD_API_KEY = "..."
+
+# Проверяем, что заданы ключ и ID каталога
+assert YANDEX_CLOUD_FOLDER_ID and YANDEX_CLOUD_API_KEY, "YANDEX_CLOUD_FOLDER_ID и YANDEX_CLOUD_API_KEY обязательны"
+
+WSS_URL = (
+    f"wss://rest-assistant.api.cloud.yandex.net/v1/realtime/openai"
+    f"?model=gpt://{YANDEX_CLOUD_FOLDER_ID}/speech-realtime-250923"
+)
+
+HEADERS = {"Authorization": f"api-key {YANDEX_CLOUD_API_KEY}"}
+
 
 # ======== Вспомогательные функции ========
-
-# Преобразует аудио float32 в формат PCM16
-def float_to_pcm16(data: np.ndarray) -> bytes:
-    data = np.clip(data, -1.0, 1.0)
-    return (data * 32767).astype(np.int16).tobytes()
-
 
 # Декодирует строку base64 в байты
 def b64_decode(s: str) -> bytes:
@@ -59,10 +54,13 @@ def b64_encode(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
 
 
-# Потокобезопасный вывод логов
-def log(*args):
-    print(*args)
-    sys.stdout.flush()
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 
 # Генерирует фиктивные погодные данные в виде JSON
@@ -86,144 +84,40 @@ def fake_weather(city: str) -> str:
     return json.dumps(weather_data, ensure_ascii=False)
 
 
-# ======== Класс для вывода аудио ========
-class AudioOut:
+def process_function_call(item):
+    call_id = item.get("call_id")
+    args_text = item.get("arguments") or "{}"
 
-    # Управляет выходным аудиопотоком с буферизацией.
-    def __init__(self, rate: int = OUT_RATE):
-        import queue
+    try:
+        args = json.loads(args_text)
+    except json.JSONDecodeError:
+        args = {}
 
-        self.queue = queue.Queue(maxsize=100)
-        self.closed = False
-        self.stream = sd.RawOutputStream(
-            samplerate=rate,
-            channels=1,
-            dtype="int16",
-            blocksize=OUT_BLOCK,
-            latency="low",
-            callback=self._audio_callback
-        )
-        self.stream.start()
+    city = (args.get("city") or "Москва").strip()
+    weather_json = fake_weather(city)
 
-    # Колбэк для аудиопотока
-    def _audio_callback(self, outdata, frames, time_info, status):
-        try:
-            chunk = self.queue.get_nowait()
-        except Exception:
-            outdata[:] = b"\x00" * (frames * 2)
-            return
-
-        need = frames * 2
-
-        if len(chunk) >= need:
-            outdata[:] = chunk[:need]
-            rest = chunk[need:]
-            if rest:
-                try:
-                    self.queue.queue.appendleft(rest)
-                except Exception:
-                    pass
-        else:
-            outdata[:len(chunk)] = chunk
-            outdata[len(chunk):] = b"\x00" * (need - len(chunk))
-
-    # Добавляет аудиоданные в очередь вывода
-    def write(self, pcm16_bytes: bytes):
-        if self.closed or not pcm16_bytes:
-            return
-
-        try:
-            self.queue.put_nowait(pcm16_bytes)
-        except Exception:
-            self.clear()
-
-    # Очищает буфер аудио
-    def clear(self):
-        try:
-            with self.queue.mutex:
-                self.queue.queue.clear()
-        except Exception:
-            pass
-
-    # Закрывает аудиопоток
-    def close(self):
-        if self.closed:
-            return
-
-        self.closed = True
-        try:
-            self.stream.stop()
-            self.stream.close()
-        except Exception:
-            pass
-
-
-# ======== Класс для записи с микрофона ========
-class MicStreamer:
-    # Передаёт аудио с микрофона в асинхронную очередь.
-    def __init__(self, output_queue: asyncio.Queue, can_stream_event: asyncio.Event):
-        self.output_queue = output_queue
-        self.running = False
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
-        self.can_stream_event = can_stream_event
-
-    # Запускает поток записи микрофона в отдельном треде
-    def start(self):
-        self.loop = asyncio.get_running_loop()
-        self.running = True
-        threading.Thread(target=self._streaming_loop, daemon=True).start()
-
-    # Основной цикл записи аудио с микрофона
-    def _streaming_loop(self):
-        try:
-            with sd.InputStream(
-                    samplerate=IN_RATE,
-                    channels=1,
-                    dtype="float32",
-                    blocksize=IN_SAMPLES,
-                    latency="low"
-            ) as stream:
-                while self.running:
-                    if not self.can_stream_event.is_set():
-                        time.sleep(0.01)
-                        continue
-
-                    data, _ = stream.read(IN_SAMPLES)
-                    pcm = float_to_pcm16(data.reshape(-1))
-
-                    if self.loop and not self.loop.is_closed():
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.output_queue.put(pcm),
-                            self.loop
-                        )
-                        try:
-                            future.result(timeout=0.2)
-                        except Exception:
-                            pass
-        except Exception as e:
-            log("[MIC ERROR]", e)
-
-    # Останавливает запись с микрофона
-    def stop(self):
-        self.running = False
+    return {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": weather_json
+        }
+    }
 
 
 # ======== Основное приложение ========
 
-# Главный цикл приложения
-async def main():
-    session = aiohttp.ClientSession()
-    ws = await session.ws_connect(WS_URL, headers=HEADERS, heartbeat=20.0)
-    log("Подключено к Realtime API.")
+async def setup_session(ws):
+    """Настройка сессии"""
 
-    # Настройка сессии
     await ws.send_json({
         "type": "session.update",
         "session": {
             "instructions": (
-                "Ты ассистент. Помогаешь с ответами на вопросы. Отвечаешь кратко и по делу."
-                "Если просят рассказать новости —  используй функцию web_search."
-                "Если спрашивают о погоде — вызывай функцию get_weather."
+                "Ты ассистент. Помогаешь с ответами на вопросы. Отвечаешь кратко и по делу. "
+                "Если просят рассказать новости —  используй функцию web_search. "
+                "Если спрашивают о погоде — вызывай функцию get_weather. "
                 "При вопросе про {голосовой профилировщик} - обращайся к фукнции file_search"
             ),
             "modalities": ["text", "audio"],
@@ -270,149 +164,126 @@ async def main():
         }
     })
 
-    # Инициализация компонентов аудио
-    mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=50)
-    can_stream_input = asyncio.Event()
-    can_stream_input.set()
 
-    mic = MicStreamer(mic_queue, can_stream_input)
-    mic.start()
-
-    audio_out = AudioOut()
-    session_id = None
-
+# pylint: disable-next=too-many-branches
+async def downlink(ws, audio_out):
+    """Приём и обработка сообщений от сервера"""
     # Управление "эпохами" озвучки
     play_epoch = 0
     current_response_epoch = None
 
-    # Отправка аудио с микрофона на сервер
-    async def uplink():
-        try:
-            while True:
-                await can_stream_input.wait()
-                pcm = await mic_queue.get()
-                await ws.send_json({
-                    "type": "input_audio_buffer.append",
-                    "audio": b64_encode(pcm)
-                })
-        except asyncio.CancelledError:
-            pass
+    async for msg in ws:
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            logger.info('got non-text payload from websocket: %s', msg.data)
+            continue
 
-    # Приём и обработка сообщений от сервера
-    async def downlink():
-        nonlocal session_id, play_epoch, current_response_epoch
+        message = json.loads(msg.data)
+        msg_type = message.get("type")
 
-        async for msg in ws:
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
-
-            message = json.loads(msg.data)
-            msg_type = message.get("type")
-
-            if msg_type not in {"input_audio_buffer.commit", "response.output_text.delta",
-                                "conversation.item.input_audio_transcription.completed",
-                                "session.created"}:
-                log(f"on_message: {msg_type}")
-
+        match msg_type:
             # Распознанный текст пользователя
-            if msg_type == "conversation.item.input_audio_transcription.completed":
+            case "conversation.item.input_audio_transcription.completed":
                 transcript = message.get("transcript", "")
                 if transcript:
-                    log(f"on_message: {msg_type} [user (transcript): {transcript}]")
-                continue
+                    logger.info("on_message %s: [user (transcript): %r]", msg_type, transcript)
 
             # Текст, который сервер отправляет на озвучку
-            if msg_type == "response.output_text.delta":
+            case "response.output_text.delta":
                 delta = message.get("delta", "")
                 if delta:
-                    log(f"on_message: {msg_type} [agent (text): {delta}]")
-                continue
+                    logger.info("on_message %s: [agent (text): %r]", msg_type, delta)
 
             # Логируем id сессии
-            if msg_type == "session.created":
+            case "session.created":
                 session_id = (message.get("session") or {}).get("id")
-                log(f"on_message: {msg_type} [session.id = {session_id}]")
-                continue
+                logger.info("on_message %s: [session.id = %r]", msg_type, session_id)
 
             # Пользователь начал говорить — прерываем текущий ответ
-            if msg_type == "input_audio_buffer.speech_started":
+            case "input_audio_buffer.speech_started":
                 play_epoch += 1
                 current_response_epoch = None
-                audio_out.clear()
-                continue
+                logger.debug("on_message %s: clear audio out buffer", msg_type)
+                await audio_out.clear()
 
             # Начало нового ответа ассистента
-            if msg_type == "response.created":
+            case "response.created":
                 current_response_epoch = play_epoch
-                continue
 
             # Поступают аудиоданные от ассистента
-            if msg_type == "response.output_audio.delta":
+            case "response.output_audio.delta":
                 if current_response_epoch == play_epoch:
-                    audio_out.write(b64_decode(message["delta"]))
-                continue
+                    delta = message["delta"]
+                    decoded = b64_decode(delta)
+                    logger.debug("on_message %s: got %d bytes", msg_type, len(decoded))
+                    await audio_out.write(decoded)
 
-            # Завершение вызова функции
-            if msg_type == "response.output_item.done":
+            case "response.output_item.done":
                 item = message.get("item") or {}
+                if item.get("type") != 'function_call':
+                    logger.info(
+                        'on_message %s: got non-function call payload %r',
+                        msg_type, item
+                    )
+                    continue
 
-                if item.get("type") == "function_call":
-                    call_id = item.get("call_id")
-                    args_text = item.get("arguments") or "{}"
+                payload_item = process_function_call(item)
 
-                    try:
-                        args = json.loads(args_text)
-                    except Exception:
-                        args = {}
+                logger.info(
+                    "[conversation.item.create(function_call_output): %r]",
+                    payload_item,
+                )
+                await ws.send_json(payload_item)
 
-                    city = (args.get("city") or "Москва").strip()
-                    weather_json = fake_weather(city)
+                # Запрашиваем новый ответ агента
+                logger.info("отправляем response.create после функции")
+                await ws.send_json({
+                    "type": "response.create"
+                })
 
-                    payload_item = {
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": weather_json
-                        }
-                    }
+            case "error":
+                logger.error("ОШИБКА СЕРВЕРА: %r", json.dumps(message, ensure_ascii=False))
 
-                    log("[conversation.item.create(function_call_output):",
-                        json.dumps(payload_item, ensure_ascii=False))
-                    await ws.send_json(payload_item)
+            case other:
+                logger.info('on_message %s: [можно добавить ваш обработчик]', other)
 
-                    # Запрашиваем новый ответ агента
-                    log("отправляем response.create после функции")
-                    await ws.send_json({
-                        "type": "response.create"
-                    })
-                continue
+    logger.info("WS соединение закрыто")
 
-            # Обработка ошибок
-            if msg_type == "error":
-                log("ОШИБКА СЕРВЕРА:", json.dumps(message, ensure_ascii=False))
-                continue
 
-        log("WS соединение закрыто")
+async def uplink(ws):
+    """Отправка аудио с микрофона на сервер"""
+    mic = AsyncMicrophone(samplerate=IN_RATE)
+    async for pcm in mic:
+        logger.debug('send payload with size %d', len(pcm))
 
-    log("Говорите (server VAD). Нажмите Ctrl+C для выхода.")
+        try:
+            await ws.send_json({
+                "type": "input_audio_buffer.append",
+                "audio": b64_encode(pcm)
+            })
+        except aiohttp.ClientConnectionResetError:
+            logger.warning("unable to send new data due to websocket was closed")
+            return
 
-    uplink_task = asyncio.create_task(uplink())
-    downlink_task = asyncio.create_task(downlink())
+
+# Главный цикл приложения
+async def main():
+    print("Говорите (server VAD). Нажмите Ctrl+C для выхода.")
 
     try:
-        while True:
-            await asyncio.sleep(3600)
-    except KeyboardInterrupt:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(WSS_URL, headers=HEADERS, heartbeat=20.0) as ws:
+                logger.info("Подключено к Realtime API.")
+                await setup_session(ws)
+
+                async with AsyncAudioOut(samplerate=OUT_RATE) as audio_out:
+                    await asyncio.gather(
+                        uplink(ws),
+                        downlink(ws, audio_out)
+                    )
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        uplink_task.cancel()
-        downlink_task.cancel()
-        mic.stop()
-        audio_out.close()
-        await ws.close()
-        await session.close()
-        log("\nВыход.")
+        logger.info("Выход.")
 
 
 if __name__ == "__main__":
