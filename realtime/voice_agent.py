@@ -20,7 +20,7 @@ assert YANDEX_CLOUD_FOLDER_ID and YANDEX_CLOUD_API_KEY, "YANDEX_CLOUD_FOLDER_ID 
 
 # Настройки API
 WS_URL = (
-    f"wss://assistant-api.ml-rag.cloud-preprod.yandex.net/v1/realtime/openai"
+    f"wss://rest-assistant.api.cloud.yandex.net/v1/realtime/openai"
     f"?model=gpt://{YANDEX_CLOUD_FOLDER_ID}/speech-realtime-250923"
 )
 
